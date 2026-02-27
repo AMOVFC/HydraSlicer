@@ -88,6 +88,8 @@
 #include "3DBed.hpp"
 #include "PartPlate.hpp"
 #include "Camera.hpp"
+#include "HydraSyncManager.hpp"
+#include "HydraPlatePlan.hpp"
 #include "Mouse3DController.hpp"
 #include "Tab.hpp"
 #include "Jobs/OrientJob.hpp"
@@ -9257,6 +9259,7 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
      * and for SLA presets they should be deleted
      */
         wxGetApp().obj_list()->update_object_list_by_printer_technology();
+        Slic3r::Hydra::HydraSyncManager::Instance().OnPrinterActivated(wxGetApp().preset_bundle->printers.get_selected_preset_name());
 
         // BBS:Model reset by plate center
         PartPlateList& cur_plate_list = this->partplate_list;
@@ -15383,6 +15386,25 @@ int Plater::export_3mf(const boost::filesystem::path& output_path, SaveStrategy 
         picking_thumbnails[i]->reset();;
     }
     picking_thumbnails.clear();
+
+    if (ret == 0 && (strategy & SaveStrategy::WithGcode || strategy & SaveStrategy::WithSliceInfo)) {
+        Slic3r::Hydra::HydraPlatePlan plan;
+        std::vector<Slic3r::Hydra::PlateManifestEntry> entries;
+        const std::string selected_printer = wxGetApp().preset_bundle->printers.get_selected_preset_name();
+        for (int i = 0; i < p->partplate_list.get_plate_count(); ++i) {
+            Slic3r::Hydra::PlateManifestEntry entry;
+            entry.plate_uuid = "plate-" + std::to_string(i);
+            entry.gcode_file = "plate_" + std::to_string(i) + ".gcode";
+            entry.assignment.hydra_printer_id = selected_printer;
+            entry.assignment.printer_preset = selected_printer;
+            entry.assignment.filament_preset = wxGetApp().preset_bundle->filaments.get_selected_preset_name();
+            entry.assignment.print_preset = wxGetApp().preset_bundle->prints.get_selected_preset_name();
+            entry.preset_hash = selected_printer;
+            entries.push_back(entry);
+        }
+        std::ofstream manifest_out((output_path.parent_path() / "manifest.json").string(), std::ios::trunc);
+        manifest_out << plan.build_manifest_json(entries);
+    }
 
     return ret;
 }

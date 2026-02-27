@@ -12,6 +12,7 @@ add_subdirectory(dev-utils)
 find_package(libnoise REQUIRED)
 
 add_subdirectory(libslic3r)
+add_subdirectory(hydra)
 
 if (SLIC3R_GUI)
     # imgui, imguizmo, and hidapi are now included from deps_src
@@ -125,7 +126,7 @@ if (NOT WIN32 AND NOT APPLE)
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/dev-utils/platform/unix/build_linux_image.sh.in ${CMAKE_CURRENT_BINARY_DIR}/build_linux_image.sh USE_SOURCE_PERMISSIONS @ONLY)
 endif ()
 
-target_link_libraries(OrcaSlicer libslic3r cereal::cereal)
+target_link_libraries(OrcaSlicer libslic3r cereal::cereal hydra)
 # target_include_directories(OrcaSlicer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/slic3r)
 if (APPLE)
 #    add_compile_options(-stdlib=libc++)
@@ -176,7 +177,7 @@ if (WIN32)
     target_compile_definitions(OrcaSlicer_app_gui PRIVATE -DSLIC3R_WRAPPER_NOCONSOLE)
     add_dependencies(OrcaSlicer_app_gui OrcaSlicer)
     set_target_properties(OrcaSlicer_app_gui PROPERTIES OUTPUT_NAME "orca-slicer")
-    target_link_libraries(OrcaSlicer_app_gui PRIVATE boost_headeronly)
+    target_link_libraries(OrcaSlicer_app_gui PRIVATE boost_headeronly hydra)
 endif ()
 
 # Link the resources dir to where Slic3r GUI expects it

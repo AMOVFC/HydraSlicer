@@ -35,6 +35,7 @@
 #include "GUI_ObjectList.hpp"
 #include "Plater.hpp"
 #include "MainFrame.hpp"
+#include "HydraSyncManager.hpp"
 #include "format.hpp"
 #include "UnsavedChangesDialog.hpp"
 #include "SavePresetDialog.hpp"
@@ -6479,6 +6480,8 @@ void Tab::save_preset(std::string name /*= ""*/, bool detach, bool save_to_proje
         for (Preset::Type preset_type : dependent)
             wxGetApp().get_tab(preset_type)->update_tab_ui();
     }
+
+    Slic3r::Hydra::HydraSyncManager::Instance().OnPresetsPossiblyChanged(wxGetApp().preset_bundle->printers.get_selected_preset_name());
 
     // update preset comboboxes in DiffPresetDlg
     wxGetApp().mainframe->diff_dialog.update_presets(m_type);
