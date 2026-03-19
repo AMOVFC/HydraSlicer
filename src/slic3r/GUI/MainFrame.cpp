@@ -13,6 +13,9 @@
 #include <wx/filename.h>
 #include <wx/debug.h>
 #include <wx/utils.h>
+#include <wx/checkbox.h>
+#include <wx/textctrl.h>
+#include <wx/stattext.h>
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/log/trivial.hpp>
@@ -49,6 +52,8 @@
 
 #include <fstream>
 #include <string_view>
+#include <sstream>
+#include <optional>
 
 #include "GUI_App.hpp"
 #include "UnsavedChangesDialog.hpp"
@@ -71,7 +76,13 @@
 #include <shlobj.h>
 #include <shellapi.h>
 #endif // _WIN32
+#include <thread>
 #include <slic3r/GUI/CreatePresetsDialog.hpp>
+#include "HydraSettings.hpp"
+#include "HydraSyncManager.hpp"
+#include "HydraMoonrakerClient.hpp"
+#include "HydraPresetBundle.hpp"
+#include "HydraGitSync.hpp"
 
 
 namespace Slic3r {
@@ -1649,6 +1660,173 @@ wxBoxSizer* MainFrame::create_side_tools()
 
     m_filament_group_popup = new FilamentGroupPopup(m_slice_btn);
 
+    m_hydra_status = new wxStaticText(this, wxID_ANY, _L("Hydra: in sync"));
+    m_hydra_status->SetForegroundColour(*wxBLUE);
+    sizer->Add(m_hydra_status, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(6));
+
+    Slic3r::Hydra::HydraSyncManager::Instance().configure_store_root((Slic3r::data_dir() / "hydra_cache").string());
+    Slic3r::Hydra::HydraSettings::Instance().set_storage_path((Slic3r::data_dir() / "hydra_settings.json").string());
+    Slic3r::Hydra::HydraSettings::Instance().load();
+    Slic3r::Hydra::HydraPresetBundle::Instance().set_export_handler([](const std::string &) -> std::optional<std::string> {
+        const auto &printer = wxGetApp().preset_bundle->printers.get_selected_preset();
+        if (printer.file.empty()) return std::nullopt;
+        std::ifstream in(printer.file, std::ios::binary);
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        return ss.str();
+    });
+    Slic3r::Hydra::HydraPresetBundle::Instance().set_import_handler([](const std::string &payload, const std::string &) -> bool {
+        const auto &printer = wxGetApp().preset_bundle->printers.get_selected_preset();
+        if (printer.file.empty()) return false;
+        std::ofstream out(printer.file, std::ios::binary | std::ios::trunc);
+        if (!out.is_open()) return false;
+        out << payload;
+        return true;
+    });
+    Slic3r::Hydra::HydraSyncManager::Instance().set_status_callback([this](Slic3r::Hydra::SyncState state, const std::string &msg) {
+        wxGetApp().CallAfter([this, state, msg]() {
+            if (!m_hydra_status) return;
+            if (state == Slic3r::Hydra::SyncState::InSync)
+                m_hydra_status->SetLabel(_L("Hydra: in sync"));
+            else if (state == Slic3r::Hydra::SyncState::PendingLocalChanges)
+                m_hydra_status->SetLabel(_L("Hydra: local changes pending"));
+            else
+                m_hydra_status->SetLabel(_L("Hydra: sync failed"));
+            m_hydra_status->SetToolTip(msg);
+            Layout();
+        });
+    });
+
+    m_hydra_status->Bind(wxEVT_LEFT_UP, [this](wxMouseEvent &) {
+        const std::string printer_preset_id = wxGetApp().preset_bundle->printers.get_selected_preset_name();
+        auto settings = Slic3r::Hydra::HydraSettings::Instance().get_for_preset(printer_preset_id).value_or(Slic3r::Hydra::PrinterSettings{});
+
+        wxDialog dlg(this, wxID_ANY, _L("Printer-resident Profiles"), wxDefaultPosition, wxSize(620, 520));
+        auto *main = new wxBoxSizer(wxVERTICAL);
+        auto *grid = new wxFlexGridSizer(2, FromDIP(8), FromDIP(8));
+        auto *hydra_id = new wxTextCtrl(&dlg, wxID_ANY, from_u8(settings.hydra_printer_id));
+        auto *base_url = new wxTextCtrl(&dlg, wxID_ANY, from_u8(settings.moonraker_base_url));
+        auto *mount = new wxTextCtrl(&dlg, wxID_ANY, from_u8(settings.fallback_mount_path));
+        auto *pull = new wxCheckBox(&dlg, wxID_ANY, _L("Auto-pull on printer activation"));
+        auto *push = new wxCheckBox(&dlg, wxID_ANY, _L("Auto-push on export/slice"));
+        pull->SetValue(settings.auto_pull_on_activate);
+        push->SetValue(settings.auto_push_on_export);
+
+        auto *cloud_mode = new wxChoice(&dlg, wxID_ANY);
+        cloud_mode->Append(_L("Disabled"));
+        cloud_mode->Append(_L("Supabase + GitHub sign-in"));
+        cloud_mode->Append(_L("Git repository backup"));
+
+        int cloud_mode_selection = 0;
+        if (settings.cloud_sync_mode == Slic3r::Hydra::PrinterSettings::CloudSyncMode::SupabaseGithub) cloud_mode_selection = 1;
+        else if (settings.cloud_sync_mode == Slic3r::Hydra::PrinterSettings::CloudSyncMode::GitRepository) cloud_mode_selection = 2;
+        cloud_mode->SetSelection(cloud_mode_selection);
+
+        auto *supabase_url = new wxTextCtrl(&dlg, wxID_ANY, from_u8(settings.supabase_url));
+        auto *supabase_anon_key = new wxTextCtrl(&dlg, wxID_ANY, from_u8(settings.supabase_anon_key));
+        auto *supabase_token = new wxTextCtrl(&dlg, wxID_ANY, from_u8(settings.supabase_access_token), wxDefaultPosition, wxDefaultSize, wxTE_PASSWORD);
+        auto *git_remote = new wxTextCtrl(&dlg, wxID_ANY, from_u8(settings.git_remote_url));
+        auto *git_branch = new wxTextCtrl(&dlg, wxID_ANY, from_u8(settings.git_branch.empty() ? "main" : settings.git_branch));
+        auto *git_token = new wxTextCtrl(&dlg, wxID_ANY, from_u8(settings.git_access_token), wxDefaultPosition, wxDefaultSize, wxTE_PASSWORD);
+
+        grid->Add(new wxStaticText(&dlg, wxID_ANY, _L("Hydra printer ID"))); grid->Add(hydra_id, 1, wxEXPAND);
+        grid->Add(new wxStaticText(&dlg, wxID_ANY, _L("Moonraker base URL"))); grid->Add(base_url, 1, wxEXPAND);
+        grid->Add(new wxStaticText(&dlg, wxID_ANY, _L("SD/USB fallback mount path"))); grid->Add(mount, 1, wxEXPAND);
+        grid->Add(pull); grid->Add(push);
+        grid->Add(new wxStaticText(&dlg, wxID_ANY, _L("Cloud backup mode"))); grid->Add(cloud_mode, 1, wxEXPAND);
+        grid->Add(new wxStaticText(&dlg, wxID_ANY, _L("Supabase URL"))); grid->Add(supabase_url, 1, wxEXPAND);
+        grid->Add(new wxStaticText(&dlg, wxID_ANY, _L("Supabase anon key"))); grid->Add(supabase_anon_key, 1, wxEXPAND);
+        grid->Add(new wxStaticText(&dlg, wxID_ANY, _L("Supabase access token"))); grid->Add(supabase_token, 1, wxEXPAND);
+        grid->Add(new wxStaticText(&dlg, wxID_ANY, _L("Git remote URL"))); grid->Add(git_remote, 1, wxEXPAND);
+        grid->Add(new wxStaticText(&dlg, wxID_ANY, _L("Git branch"))); grid->Add(git_branch, 1, wxEXPAND);
+        grid->Add(new wxStaticText(&dlg, wxID_ANY, _L("GitHub token (optional)"))); grid->Add(git_token, 1, wxEXPAND);
+        grid->AddGrowableCol(1, 1);
+
+        auto update_cloud_visibility = [cloud_mode, supabase_url, supabase_anon_key, supabase_token, git_remote, git_branch, git_token]() {
+            const int sel = cloud_mode->GetSelection();
+            const bool supabase_visible = (sel == 1);
+            const bool git_visible = (sel == 2);
+            supabase_url->Show(supabase_visible);
+            supabase_anon_key->Show(supabase_visible);
+            supabase_token->Show(supabase_visible);
+            git_remote->Show(git_visible);
+            git_branch->Show(git_visible);
+            git_token->Show(git_visible);
+        };
+
+        main->Add(grid, 1, wxEXPAND | wxALL, FromDIP(10));
+        auto *buttons = new wxBoxSizer(wxHORIZONTAL);
+        auto *test = new wxButton(&dlg, wxID_ANY, _L("Test Connection"));
+        auto *test_cloud = new wxButton(&dlg, wxID_ANY, _L("Test Cloud Backup"));
+        buttons->Add(test, 0, wxRIGHT, FromDIP(8));
+        buttons->Add(test_cloud, 0, wxRIGHT, FromDIP(8));
+        buttons->Add(new wxButton(&dlg, wxID_OK, _L("Save")), 0, wxRIGHT, FromDIP(6));
+        buttons->Add(new wxButton(&dlg, wxID_CANCEL, _L("Cancel")), 0);
+        main->Add(buttons, 0, wxALIGN_RIGHT | wxALL, FromDIP(10));
+        dlg.SetSizer(main);
+
+        cloud_mode->Bind(wxEVT_CHOICE, [&dlg, update_cloud_visibility](wxCommandEvent &) {
+            update_cloud_visibility();
+            dlg.Layout();
+            dlg.Fit();
+        });
+        update_cloud_visibility();
+        dlg.Layout();
+        dlg.Fit();
+
+        test->Bind(wxEVT_BUTTON, [hydra_id, base_url, this](wxCommandEvent &) {
+            const std::string hydra_printer = hydra_id->GetValue().ToStdString();
+            const std::string moonraker_url = base_url->GetValue().ToStdString();
+            std::thread([hydra_printer, moonraker_url, this]() {
+                Slic3r::Hydra::HydraMoonrakerClient client;
+                auto res = client.list(moonraker_url, "config/slicer/" + hydra_printer);
+                wxGetApp().CallAfter([res, this]() {
+                    MessageDialog(this, res.ok ? _L("Connection successful.") : _L("Connection failed."), _L("Hydra"), wxOK | (res.ok ? wxICON_INFORMATION : wxICON_WARNING)).ShowModal();
+                });
+            }).detach();
+        });
+
+        test_cloud->Bind(wxEVT_BUTTON, [cloud_mode, git_remote, git_branch, git_token, this](wxCommandEvent &) {
+            if (cloud_mode->GetSelection() != 2) {
+                MessageDialog(this, _L("Cloud test is only available for Git repository mode."), _L("Hydra"), wxOK | wxICON_INFORMATION).ShowModal();
+                return;
+            }
+            const std::string remote = git_remote->GetValue().ToStdString();
+            const std::string branch = git_branch->GetValue().ToStdString();
+            const std::string token = git_token->GetValue().ToStdString();
+            std::thread([remote, branch, token, this]() {
+                const std::string cache_root = (Slic3r::data_dir() / "hydra_cache" / "git_test").string();
+                Slic3r::Hydra::HydraGitSync git_sync(cache_root, remote, branch.empty() ? std::string("main") : branch, token);
+                auto res = git_sync.test_connection();
+                wxGetApp().CallAfter([res, this]() {
+                    MessageDialog(this, res.ok ? _L("Git connection successful.") : _L("Git connection failed."), _L("Hydra"), wxOK | (res.ok ? wxICON_INFORMATION : wxICON_WARNING)).ShowModal();
+                });
+            }).detach();
+        });
+
+        if (dlg.ShowModal() == wxID_OK) {
+            settings.hydra_printer_id = hydra_id->GetValue().ToStdString();
+            settings.moonraker_base_url = base_url->GetValue().ToStdString();
+            settings.fallback_mount_path = mount->GetValue().ToStdString();
+            settings.auto_pull_on_activate = pull->GetValue();
+            settings.auto_push_on_export = push->GetValue();
+
+            if (cloud_mode->GetSelection() == 1) settings.cloud_sync_mode = Slic3r::Hydra::PrinterSettings::CloudSyncMode::SupabaseGithub;
+            else if (cloud_mode->GetSelection() == 2) settings.cloud_sync_mode = Slic3r::Hydra::PrinterSettings::CloudSyncMode::GitRepository;
+            else settings.cloud_sync_mode = Slic3r::Hydra::PrinterSettings::CloudSyncMode::None;
+
+            settings.supabase_url = supabase_url->GetValue().ToStdString();
+            settings.supabase_anon_key = supabase_anon_key->GetValue().ToStdString();
+            settings.supabase_access_token = supabase_token->GetValue().ToStdString();
+            settings.git_remote_url = git_remote->GetValue().ToStdString();
+            settings.git_branch = git_branch->GetValue().ToStdString();
+            settings.git_access_token = git_token->GetValue().ToStdString();
+
+            Slic3r::Hydra::HydraSettings::Instance().set_for_preset(printer_preset_id, settings);
+            Slic3r::Hydra::HydraSettings::Instance().save();
+        }
+    });
+
     auto try_hover_pop_up = [this]() {
 #ifdef __APPLE__
         if (!IsActive()) {
@@ -1702,6 +1880,7 @@ wxBoxSizer* MainFrame::create_side_tools()
             #endif
 
             if (slice) {
+                Slic3r::Hydra::HydraSyncManager::Instance().OnPresetsPossiblyChanged(wxGetApp().preset_bundle->printers.get_selected_preset_name());
                 if (m_slice_select == eSliceAll)
                     wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_SLICE_ALL));
                 else
@@ -1728,8 +1907,10 @@ wxBoxSizer* MainFrame::create_side_tools()
                          wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_PRINT_MULTI_MACHINE));
                 }
             }
-            else if (m_print_select == eExportGcode)
+            else if (m_print_select == eExportGcode) {
+                Slic3r::Hydra::HydraSyncManager::Instance().OnPresetsPossiblyChanged(wxGetApp().preset_bundle->printers.get_selected_preset_name());
                 wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_EXPORT_GCODE));
+            }
             else if (m_print_select == eSendGcode)
                 wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_SEND_GCODE));
             else if (m_print_select == eUploadGcode)
@@ -2535,7 +2716,7 @@ void MainFrame::init_menubar_as_editor()
             [this]() {return can_export_all_gcode(); }, this);
 
         append_menu_item(export_menu, wxID_ANY, _L("Export G-code") + dots/* + "\t" + ctrl + "G"*/, _L("Export current plate as G-code"),
-            [this](wxCommandEvent&) { if (m_plater) m_plater->export_gcode(false); }, "menu_export_gcode", nullptr,
+            [this](wxCommandEvent&) { if (m_plater) { Slic3r::Hydra::HydraSyncManager::Instance().OnPresetsPossiblyChanged(wxGetApp().preset_bundle->printers.get_selected_preset_name()); m_plater->export_gcode(false); } }, "menu_export_gcode", nullptr,
             [this]() {return can_export_gcode(); }, this);
 
         append_menu_item(export_menu, wxID_ANY, _L("Export toolpaths as OBJ") + dots, _L("Export toolpaths as OBJ"),

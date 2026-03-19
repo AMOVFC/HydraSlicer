@@ -41,6 +41,7 @@
 class Notebook;
 class wxBookCtrlBase;
 class wxProgressDialog;
+class wxStaticText;
 
 namespace Slic3r {
 
@@ -403,6 +404,7 @@ public:
     SideButton* m_print_option_btn{ nullptr };
 
     SidePopup*  m_slice_option_pop_up{ nullptr };
+    wxStaticText* m_hydra_status{ nullptr };
 
     FilamentGroupPopup* m_filament_group_popup{ nullptr };
     mutable bool          m_slice_enable{ true };
