@@ -17,6 +17,7 @@
 #include "slic3r/GUI/HMS.hpp"
 #include "slic3r/GUI/Jobs/UpgradeNetworkJob.hpp"
 #include "slic3r/GUI/HttpServer.hpp"
+#include "slic3r/Utils/SupabaseAuth.hpp"
 #include "../Utils/PrintHost.hpp"
 
 #include <wx/app.h>
@@ -301,6 +302,12 @@ private:
 
     // login widget
     ZUserLogin*     login_dlg { nullptr };
+
+    // HydraSlicer: Supabase authentication
+    SupabaseAuth    m_supabase_auth;
+    void            show_hydra_login_dialog();
+    bool            is_hydra_logged_in() const { return m_supabase_auth.is_logged_in(); }
+    SupabaseAuth&   supabase_auth() { return m_supabase_auth; }
 
     VersionInfo version_info;
     VersionInfo privacy_version_info;

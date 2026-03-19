@@ -3241,6 +3241,23 @@ void MainFrame::init_menubar_as_editor()
         [this]() {return m_plater->is_view3D_shown();; }, this);
 
     m_menubar->Append(calib_menu,wxString::Format("&%s", _L("Calibration")));
+
+    // HydraSlicer: Account menu
+    auto hydra_menu = new wxMenu();
+    append_menu_item(hydra_menu, wxID_ANY, _L("Sign In..."), _L("Sign in with GitHub or Google"),
+        [this](wxCommandEvent&) {
+            wxGetApp().show_hydra_login_dialog();
+        });
+    hydra_menu->AppendSeparator();
+    append_menu_item(hydra_menu, wxID_ANY, _L("Sign Out"), _L("Sign out of HydraSlicer"),
+        [this](wxCommandEvent&) {
+            if (wxGetApp().is_hydra_logged_in()) {
+                wxGetApp().supabase_auth().logout();
+            }
+        }, "", nullptr,
+        [this]() { return wxGetApp().is_hydra_logged_in(); }, this);
+    m_menubar->Append(hydra_menu, wxString::Format("&%s", _L("Account")));
+
     if (helpMenu)
         m_menubar->Append(helpMenu, wxString::Format("&%s", _L("Help")));
     SetMenuBar(m_menubar);

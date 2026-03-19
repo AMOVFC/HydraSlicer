@@ -30,6 +30,11 @@ using namespace nlohmann;
 #define SETTING_NETWORK_PLUGIN_REMIND_LATER "network_plugin_remind_later"
 #define SETTING_USE_ENCRYPTED_TOKEN_FILE "use_encrypted_token_file"
 
+// HydraSlicer: Supabase authentication settings
+#define SETTING_SUPABASE_URL          "supabase_url"
+#define SETTING_SUPABASE_ANON_KEY     "supabase_anon_key"
+#define SETTING_SUPABASE_CALLBACK_PORT "supabase_callback_port"
+
 #if defined(_WIN32) || defined(_WIN64)
 #define BAMBU_NETWORK_AGENT_VERSION_LEGACY "01.10.01.09"
 #else

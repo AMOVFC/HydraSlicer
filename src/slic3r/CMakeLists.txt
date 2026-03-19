@@ -347,6 +347,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/NotificationManager.hpp
     GUI/OAuthDialog.cpp
     GUI/OAuthDialog.hpp
+    GUI/HydraLoginDialog.cpp
+    GUI/HydraLoginDialog.hpp
     GUI/ObjColorDialog.cpp
     GUI/ObjColorDialog.hpp
     GUI/ObjectDataViewModel.cpp
@@ -604,6 +606,8 @@ set(SLIC3R_GUI_SOURCES
     Utils/IPrinterAgent.hpp
     Utils/OrcaCloudServiceAgent.cpp
     Utils/OrcaCloudServiceAgent.hpp
+    Utils/SupabaseAuth.cpp
+    Utils/SupabaseAuth.hpp
     Utils/OrcaPrinterAgent.cpp
     Utils/OrcaPrinterAgent.hpp
     Utils/QidiPrinterAgent.cpp
