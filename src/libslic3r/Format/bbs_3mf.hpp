@@ -108,6 +108,11 @@ struct PlateData
 
     std::vector<GCodeProcessorResult::SliceWarning> warnings;
 
+    // HydraSlicer: Per-plate preset overrides for multi-printer slicing
+    std::string     plate_printer_preset;    // empty = use global printer
+    std::string     plate_process_preset;    // empty = use global process
+    std::vector<std::string> plate_filament_presets; // empty = use global filaments
+
     std::string get_gcode_prediction_str() {
         return gcode_prediction;
     }

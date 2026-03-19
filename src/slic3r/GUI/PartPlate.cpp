@@ -242,6 +242,83 @@ void PartPlate::reset_skirt_start_angle()
     m_config.erase("skirt_start_angle");
 }
 
+// HydraSlicer: Build a full config for this plate using per-plate preset overrides.
+// If no overrides are set, falls back to the global PresetBundle config.
+DynamicPrintConfig PartPlate::build_full_config(const PresetBundle& bundle) const
+{
+    if (!m_preset_override.has_any_override()) {
+        // No per-plate overrides - use global config with plate-local settings applied
+        DynamicPrintConfig config = bundle.full_config();
+        config.apply(m_config, true);
+        return config;
+    }
+
+    // Resolve presets: use override if set, otherwise fall back to global
+    PresetBundle& mutable_bundle = const_cast<PresetBundle&>(bundle);
+
+    // Resolve printer preset
+    Preset* printer_preset = nullptr;
+    if (m_preset_override.has_printer_override()) {
+        printer_preset = mutable_bundle.printers.find_preset(m_preset_override.printer_preset_name, false, true);
+    }
+    if (!printer_preset) {
+        printer_preset = &mutable_bundle.printers.get_edited_preset();
+    }
+
+    // Resolve process preset
+    Preset* process_preset = nullptr;
+    if (m_preset_override.has_process_override()) {
+        process_preset = mutable_bundle.prints.find_preset(m_preset_override.process_preset_name, false, true);
+    }
+    if (!process_preset) {
+        process_preset = &mutable_bundle.prints.get_edited_preset();
+    }
+
+    // Resolve filament presets
+    std::vector<Preset> filament_presets_vec;
+    if (m_preset_override.has_filament_override()) {
+        for (const auto& name : m_preset_override.filament_preset_names) {
+            Preset* fp = mutable_bundle.filaments.find_preset(name, false, true);
+            if (fp) {
+                filament_presets_vec.push_back(*fp);
+            } else {
+                // Fall back to default filament if override not found
+                filament_presets_vec.push_back(mutable_bundle.filaments.get_edited_preset());
+            }
+        }
+    } else {
+        // Use global filament presets
+        for (const auto& name : bundle.filament_presets) {
+            Preset* fp = mutable_bundle.filaments.find_preset(name, true, true);
+            if (fp) {
+                filament_presets_vec.push_back(*fp);
+            }
+        }
+        if (filament_presets_vec.empty()) {
+            filament_presets_vec.push_back(mutable_bundle.filaments.get_edited_preset());
+        }
+    }
+
+    // Use the static construct_full_config to build the merged config
+    DynamicPrintConfig config = PresetBundle::construct_full_config(
+        *printer_preset, *process_preset, bundle.project_config,
+        filament_presets_vec, true, std::nullopt);
+
+    // Apply plate-local overrides (bed type, print sequence, spiral mode, etc.)
+    config.apply(m_config, true);
+
+    return config;
+}
+
+// HydraSlicer: Get the printer preset name for this plate
+std::string PartPlate::get_printer_preset_name(const PresetBundle& bundle) const
+{
+    if (m_preset_override.has_printer_override()) {
+        return m_preset_override.printer_preset_name;
+    }
+    return bundle.printers.get_selected_preset_name();
+}
+
 void PartPlate::set_print_seq(PrintSequence print_seq)
 {
     std::string print_seq_key = "print_sequence";
@@ -5958,6 +6035,12 @@ int PartPlateList::store_to_3mf_structure(PlateDataPtrs& plate_data_list, bool w
 			%(i+1) %plate_data_item->plate_thumbnail.width %plate_data_item->plate_thumbnail.height %plate_data_item->plate_thumbnail.pixels.size();
 		plate_data_item->config.apply(*m_plate_list[i]->config());
 
+		// HydraSlicer: Store per-plate preset overrides
+		const auto& override = m_plate_list[i]->get_preset_override();
+		plate_data_item->plate_printer_preset = override.printer_preset_name;
+		plate_data_item->plate_process_preset = override.process_preset_name;
+		plate_data_item->plate_filament_presets = override.filament_preset_names;
+
 		if (m_plate_list[i]->no_light_thumbnail_data.is_valid())
 			plate_data_item->no_light_thumbnail_file = "valid_no_light";
 		if (m_plate_list[i]->top_thumbnail_data.is_valid())
@@ -6039,6 +6122,15 @@ int PartPlateList::load_from_3mf_structure(PlateDataPtrs& plate_data_list, int f
 		m_plate_list[index]->m_locked = plate_data_list[i]->locked;
 		m_plate_list[index]->config()->apply(plate_data_list[i]->config);
 		m_plate_list[index]->set_plate_name(plate_data_list[i]->plate_name);
+
+		// HydraSlicer: Load per-plate preset overrides
+		{
+			PlatePresetOverride override;
+			override.printer_preset_name = plate_data_list[i]->plate_printer_preset;
+			override.process_preset_name = plate_data_list[i]->plate_process_preset;
+			override.filament_preset_names = plate_data_list[i]->plate_filament_presets;
+			m_plate_list[index]->set_preset_override(override);
+		}
 		if (plate_data_list[i]->plate_index != index)
 		{
 			BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":plate index %1% seems invalid, skip it")% plate_data_list[i]->plate_index;
