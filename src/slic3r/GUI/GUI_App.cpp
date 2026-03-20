@@ -1,6 +1,7 @@
 #include "libslic3r/Technologies.hpp"
 #include "GUI_App.hpp"
 #include "GUI_Init.hpp"
+#include "HydraLoginDialog.hpp"
 #include "GUI_ObjectList.hpp"
 #include "GUI_Factories.hpp"
 #include "slic3r/GUI/UserManager.hpp"
@@ -4409,6 +4410,34 @@ wxString GUI_App::transition_tridid(int trid_id) const
         int id_index = std::clamp((int)ceil(trid_id / 4), 0, 25);
         int id_suffix = trid_id % 4 + 1;
         return wxString::Format("%s%d", maping_dict[id_index], id_suffix);
+    }
+}
+
+// HydraSlicer: Show the Supabase login dialog with GitHub/Google
+void GUI_App::show_hydra_login_dialog()
+{
+    if (m_supabase_auth.get_config().project_url.empty()) {
+        // Try loading config from app config
+        m_supabase_auth.load_config_from_app(app_config);
+    }
+
+    if (m_supabase_auth.get_config().project_url.empty()) {
+        BOOST_LOG_TRIVIAL(warning) << "SupabaseAuth: no configuration found. "
+            "Set supabase_url and supabase_anon_key in app config.";
+        wxMessageBox(_L("Supabase authentication is not configured.\n"
+                        "Please set supabase_url and supabase_anon_key in preferences."),
+                     _L("Login Not Available"), wxOK | wxICON_INFORMATION);
+        return;
+    }
+
+    HydraLoginDialog dlg(mainframe, m_supabase_auth);
+    int result = dlg.ShowModal();
+    if (result == wxID_OK) {
+        auto oauth_result = dlg.get_result();
+        if (oauth_result.success) {
+            BOOST_LOG_TRIVIAL(info) << "HydraSlicer: login successful";
+            // TODO: Update UI to show logged-in state
+        }
     }
 }
 

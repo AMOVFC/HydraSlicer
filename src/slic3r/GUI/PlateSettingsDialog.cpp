@@ -383,6 +383,54 @@ PlateSettingsDialog::PlateSettingsDialog(wxWindow* parent, const wxString& title
     top_sizer->Add(plate_name_txt, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_LEFT | wxTOP | wxBOTTOM, FromDIP(5));
     top_sizer->Add(m_ti_plate_name, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_RIGHT | wxTOP | wxBOTTOM, FromDIP(5));
 
+    // HydraSlicer: Printer assignment for multi-printer slicing
+    {
+        m_printer_choice = new ComboBox(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(240), -1), 0, NULL, wxCB_READONLY);
+        m_printer_choice->Append(_L("Same as Global Printer"));
+        m_printer_preset_names.clear();
+        m_printer_preset_names.push_back(""); // index 0 = global
+
+        const auto& preset_bundle = wxGetApp().preset_bundle;
+        if (preset_bundle) {
+            for (const auto& preset : preset_bundle->printers.get_presets()) {
+                if (preset.is_visible && !preset.is_default) {
+                    m_printer_choice->Append(wxString::FromUTF8(preset.name));
+                    m_printer_preset_names.push_back(preset.name);
+                }
+            }
+        }
+        m_printer_choice->SetSelection(0);
+
+        wxStaticText* printer_txt = new wxStaticText(this, wxID_ANY, _L("Printer"));
+        printer_txt->SetFont(Label::Body_14);
+        top_sizer->Add(printer_txt, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_LEFT | wxTOP | wxBOTTOM, FromDIP(5));
+        top_sizer->Add(m_printer_choice, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_RIGHT | wxTOP | wxBOTTOM, FromDIP(5));
+    }
+
+    // HydraSlicer: Process (print profile) assignment
+    {
+        m_process_choice = new ComboBox(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(240), -1), 0, NULL, wxCB_READONLY);
+        m_process_choice->Append(_L("Same as Global Process"));
+        m_process_preset_names.clear();
+        m_process_preset_names.push_back(""); // index 0 = global
+
+        const auto& preset_bundle = wxGetApp().preset_bundle;
+        if (preset_bundle) {
+            for (const auto& preset : preset_bundle->prints.get_presets()) {
+                if (preset.is_visible && !preset.is_default) {
+                    m_process_choice->Append(wxString::FromUTF8(preset.name));
+                    m_process_preset_names.push_back(preset.name);
+                }
+            }
+        }
+        m_process_choice->SetSelection(0);
+
+        wxStaticText* process_txt = new wxStaticText(this, wxID_ANY, _L("Process"));
+        process_txt->SetFont(Label::Body_14);
+        top_sizer->Add(process_txt, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_LEFT | wxTOP | wxBOTTOM, FromDIP(5));
+        top_sizer->Add(m_process_choice, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_RIGHT | wxTOP | wxBOTTOM, FromDIP(5));
+    }
+
     m_bed_type_choice = new ComboBox( this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(240),-1), 0, NULL, wxCB_READONLY );
     auto pm           = wxGetApp().plater()->get_curr_printer_model();
     if (pm) {
@@ -611,6 +659,58 @@ wxString PlateSettingsDialog::to_print_sequence_name(PrintSequence print_seq) {
         return _L("By Layer");
     }
     return _L("By Layer");
+}
+
+// HydraSlicer: Sync preset override from plate to dialog
+void PlateSettingsDialog::sync_preset_override(const PlatePresetOverride& override)
+{
+    if (m_printer_choice) {
+        int sel = 0; // default: "Same as Global"
+        if (override.has_printer_override()) {
+            for (size_t i = 1; i < m_printer_preset_names.size(); ++i) {
+                if (m_printer_preset_names[i] == override.printer_preset_name) {
+                    sel = static_cast<int>(i);
+                    break;
+                }
+            }
+        }
+        m_printer_choice->SetSelection(sel);
+    }
+
+    if (m_process_choice) {
+        int sel = 0; // default: "Same as Global"
+        if (override.has_process_override()) {
+            for (size_t i = 1; i < m_process_preset_names.size(); ++i) {
+                if (m_process_preset_names[i] == override.process_preset_name) {
+                    sel = static_cast<int>(i);
+                    break;
+                }
+            }
+        }
+        m_process_choice->SetSelection(sel);
+    }
+}
+
+// HydraSlicer: Get preset override from dialog selections
+PlatePresetOverride PlateSettingsDialog::get_preset_override() const
+{
+    PlatePresetOverride override;
+
+    if (m_printer_choice) {
+        int sel = m_printer_choice->GetSelection();
+        if (sel > 0 && sel < static_cast<int>(m_printer_preset_names.size())) {
+            override.printer_preset_name = m_printer_preset_names[sel];
+        }
+    }
+
+    if (m_process_choice) {
+        int sel = m_process_choice->GetSelection();
+        if (sel > 0 && sel < static_cast<int>(m_process_preset_names.size())) {
+            override.process_preset_name = m_process_preset_names[sel];
+        }
+    }
+
+    return override;
 }
 
 void PlateSettingsDialog::on_dpi_changed(const wxRect& suggested_rect)

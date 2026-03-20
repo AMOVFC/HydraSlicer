@@ -8,6 +8,7 @@
 #include "Widgets/ComboBox.hpp"
 #include "DragCanvas.hpp"
 #include "libslic3r/ParameterUtils.hpp"
+#include "libslic3r/PresetBundle.hpp"
 
 namespace Slic3r { namespace GUI {
 
@@ -103,6 +104,10 @@ public:
     void sync_first_layer_print_seq(int selection, const std::vector<int>& seq = std::vector<int>());
     void sync_other_layers_print_seq(int selection, const std::vector<LayerPrintSequence>& seq);
     void sync_spiral_mode(bool spiral_mode, bool as_global);
+
+    // HydraSlicer: Multi-printer support
+    void sync_preset_override(const PlatePresetOverride& override);
+    PlatePresetOverride get_preset_override() const;
     wxString to_bed_type_name(BedType bed_type);
     wxString to_print_sequence_name(PrintSequence print_seq);
     void on_dpi_changed(const wxRect& suggested_rect) override;
@@ -169,6 +174,12 @@ protected:
     DragCanvas* m_drag_canvas;
     OtherLayersSeqPanel* m_other_layers_seq_panel;
     TextInput *m_ti_plate_name;
+
+    // HydraSlicer: Multi-printer support
+    ComboBox* m_printer_choice { nullptr };
+    ComboBox* m_process_choice { nullptr };
+    std::vector<std::string> m_printer_preset_names;  // maps combo index to preset name
+    std::vector<std::string> m_process_preset_names;   // maps combo index to preset name
 };
 
 class PlateNameEditDialog : public DPIDialog

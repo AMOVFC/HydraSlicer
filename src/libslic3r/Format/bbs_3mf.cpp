@@ -4238,6 +4238,23 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 std::istringstream(value) >> std::boolalpha >> spiral_mode;
                 m_curr_plater->config.set_key_value("spiral_mode", new ConfigOptionBool(spiral_mode));
             }
+            // HydraSlicer: Per-plate preset overrides for multi-printer slicing
+            else if (key == "plate_printer_preset") {
+                m_curr_plater->plate_printer_preset = xml_unescape(value.c_str());
+            }
+            else if (key == "plate_process_preset") {
+                m_curr_plater->plate_process_preset = xml_unescape(value.c_str());
+            }
+            else if (key == "plate_filament_presets") {
+                m_curr_plater->plate_filament_presets.clear();
+                std::string unescaped = xml_unescape(value.c_str());
+                std::istringstream iss(unescaped);
+                std::string token;
+                while (std::getline(iss, token, ';')) {
+                    if (!token.empty())
+                        m_curr_plater->plate_filament_presets.push_back(token);
+                }
+            }
             else if (key == FILAMENT_MAP_MODE_ATTR)
             {
                 FilamentMapMode map_mode = FilamentMapMode::fmmAutoForFlush;
@@ -7718,6 +7735,20 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 ConfigOption* spiral_mode_opt = plate_data->config.option("spiral_mode");
                 if (spiral_mode_opt)
                     stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << SPIRAL_VASE_MODE << "\" " << VALUE_ATTR << "=\"" << spiral_mode_opt->getBool() << "\"/>\n";
+
+                // HydraSlicer: Per-plate preset overrides for multi-printer slicing
+                if (!plate_data->plate_printer_preset.empty())
+                    stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"plate_printer_preset\" " << VALUE_ATTR << "=\"" << xml_escape(plate_data->plate_printer_preset) << "\"/>\n";
+                if (!plate_data->plate_process_preset.empty())
+                    stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"plate_process_preset\" " << VALUE_ATTR << "=\"" << xml_escape(plate_data->plate_process_preset) << "\"/>\n";
+                if (!plate_data->plate_filament_presets.empty()) {
+                    stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"plate_filament_presets\" " << VALUE_ATTR << "=\"";
+                    for (size_t fi = 0; fi < plate_data->plate_filament_presets.size(); ++fi) {
+                        if (fi > 0) stream << ";";
+                        stream << xml_escape(plate_data->plate_filament_presets[fi]);
+                    }
+                    stream << "\"/>\n";
+                }
 
                 //filament map related
                 ConfigOption* filament_map_mode_opt = plate_data->config.option("filament_map_mode");

@@ -88,6 +88,8 @@
 #include "3DBed.hpp"
 #include "PartPlate.hpp"
 #include "Camera.hpp"
+#include "HydraSyncManager.hpp"
+#include "HydraPlatePlan.hpp"
 #include "Mouse3DController.hpp"
 #include "Tab.hpp"
 #include "Jobs/OrientJob.hpp"
@@ -7654,8 +7656,21 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
 
     Print::ApplyStatus invalidated;
     const auto& preset_bundle = wxGetApp().preset_bundle;
-    if (preset_bundle->get_printer_extruder_count() > 1) {
-        PartPlate* cur_plate = background_process.get_current_plate();
+    PartPlate* cur_plate = background_process.get_current_plate();
+
+    // HydraSlicer: Use per-plate config if the plate has preset overrides
+    DynamicPrintConfig plate_config;
+    if (cur_plate && cur_plate->has_preset_override()) {
+        plate_config = cur_plate->build_full_config(*preset_bundle);
+        if (preset_bundle->get_printer_extruder_count() > 1) {
+            std::vector<int> f_maps = cur_plate->get_real_filament_maps(preset_bundle->project_config);
+            auto* filament_map_opt = plate_config.option<ConfigOptionInts>("filament_map", true);
+            if (filament_map_opt) filament_map_opt->values = f_maps;
+        }
+        invalidated = background_process.apply(this->model, std::move(plate_config));
+        if (preset_bundle->get_printer_extruder_count() > 1)
+            background_process.fff_print()->set_extruder_filament_info(get_extruder_filament_info());
+    } else if (preset_bundle->get_printer_extruder_count() > 1) {
         std::vector<int> f_maps = cur_plate->get_real_filament_maps(preset_bundle->project_config);
         invalidated = background_process.apply(this->model, preset_bundle->full_config(false, f_maps));
         background_process.fff_print()->set_extruder_filament_info(get_extruder_filament_info());
@@ -9257,6 +9272,7 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
      * and for SLA presets they should be deleted
      */
         wxGetApp().obj_list()->update_object_list_by_printer_technology();
+        Slic3r::Hydra::HydraSyncManager::Instance().OnPrinterActivated(wxGetApp().preset_bundle->printers.get_selected_preset_name());
 
         // BBS:Model reset by plate center
         PartPlateList& cur_plate_list = this->partplate_list;
@@ -15384,6 +15400,25 @@ int Plater::export_3mf(const boost::filesystem::path& output_path, SaveStrategy 
     }
     picking_thumbnails.clear();
 
+    if (ret == 0 && (strategy & SaveStrategy::WithGcode || strategy & SaveStrategy::WithSliceInfo)) {
+        Slic3r::Hydra::HydraPlatePlan plan;
+        std::vector<Slic3r::Hydra::PlateManifestEntry> entries;
+        const std::string selected_printer = wxGetApp().preset_bundle->printers.get_selected_preset_name();
+        for (int i = 0; i < p->partplate_list.get_plate_count(); ++i) {
+            Slic3r::Hydra::PlateManifestEntry entry;
+            entry.plate_uuid = "plate-" + std::to_string(i);
+            entry.gcode_file = "plate_" + std::to_string(i) + ".gcode";
+            entry.assignment.hydra_printer_id = selected_printer;
+            entry.assignment.printer_preset = selected_printer;
+            entry.assignment.filament_preset = wxGetApp().preset_bundle->filaments.get_selected_preset_name();
+            entry.assignment.print_preset = wxGetApp().preset_bundle->prints.get_selected_preset_name();
+            entry.preset_hash = selected_printer;
+            entries.push_back(entry);
+        }
+        std::ofstream manifest_out((output_path.parent_path() / "manifest.json").string(), std::ios::trunc);
+        manifest_out << plan.build_manifest_json(entries);
+    }
+
     return ret;
 }
 
@@ -16985,7 +17020,11 @@ void Plater::apply_background_progress()
     const auto& preset_bundle = wxGetApp().preset_bundle;
     //always apply the current plate's print
     Print::ApplyStatus invalidated;
-    if (preset_bundle->get_printer_extruder_count() > 1) {
+    // HydraSlicer: Use per-plate config if the plate has preset overrides
+    if (part_plate && part_plate->has_preset_override()) {
+        DynamicPrintConfig plate_config = part_plate->build_full_config(*preset_bundle);
+        invalidated = p->background_process.apply(this->model(), std::move(plate_config));
+    } else if (preset_bundle->get_printer_extruder_count() > 1) {
         std::vector<int> f_maps = part_plate->get_real_filament_maps(preset_bundle->project_config);
         invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps));
     }
@@ -17030,7 +17069,11 @@ int Plater::select_plate(int plate_index, bool need_slice)
         part_plate->get_print(&print, &gcode_result, NULL);
 
         //always apply the current plate's print
-        if (preset_bundle->get_printer_extruder_count() > 1) {
+        // HydraSlicer: Use per-plate config if the plate has preset overrides
+        if (part_plate && part_plate->has_preset_override()) {
+            DynamicPrintConfig plate_config = part_plate->build_full_config(*preset_bundle);
+            invalidated = p->background_process.apply(this->model(), std::move(plate_config));
+        } else if (preset_bundle->get_printer_extruder_count() > 1) {
             std::vector<int> f_maps = part_plate->get_real_filament_maps(preset_bundle->project_config);
             invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps));
         }
@@ -17307,6 +17350,9 @@ void Plater::open_platesettings_dialog(wxCommandEvent& evt) {
 
     dlg.sync_spiral_mode(curr_plate->get_spiral_vase_mode(), !curr_plate->has_spiral_mode_config());
 
+    // HydraSlicer: sync preset overrides
+    dlg.sync_preset_override(curr_plate->get_preset_override());
+
     dlg.Bind(EVT_SET_BED_TYPE_CONFIRM, [this, plate_index, &dlg](wxCommandEvent& e) {
         PartPlate* curr_plate = p->partplate_list.get_curr_plate();
         BedType old_bed_type = curr_plate->get_bed_type();
@@ -17343,6 +17389,19 @@ void Plater::open_platesettings_dialog(wxCommandEvent& evt) {
         }
         else {
             curr_plate->set_spiral_vase_mode(false, true);
+        }
+
+        // HydraSlicer: Apply preset overrides from dialog
+        PlatePresetOverride new_override = dlg.get_preset_override();
+        PlatePresetOverride old_override = curr_plate->get_preset_override();
+        if (new_override.printer_preset_name != old_override.printer_preset_name ||
+            new_override.process_preset_name != old_override.process_preset_name ||
+            new_override.filament_preset_names != old_override.filament_preset_names) {
+            curr_plate->set_preset_override(new_override);
+            // Invalidate slice results since config changed
+            curr_plate->update_slice_result_valid_state(false);
+            BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format("set printer override '%1%', process override '%2%' for plate %3%")
+                % new_override.printer_preset_name % new_override.process_preset_name % plate_index;
         }
 
         update_project_dirty_from_presets();
@@ -17452,7 +17511,11 @@ int Plater::select_plate_by_hover_id(int hover_id, bool right_click, bool isModi
 
             part_plate->get_print(&print, &gcode_result, NULL);
             //always apply the current plate's print
-            if (preset_bundle->get_printer_extruder_count() > 1) {
+            // HydraSlicer: Use per-plate config if the plate has preset overrides
+            if (part_plate && part_plate->has_preset_override()) {
+                DynamicPrintConfig plate_config = part_plate->build_full_config(*preset_bundle);
+                invalidated = p->background_process.apply(this->model(), std::move(plate_config));
+            } else if (preset_bundle->get_printer_extruder_count() > 1) {
                 std::vector<int> f_maps = part_plate->get_real_filament_maps(preset_bundle->project_config);
                 invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps));
             }
