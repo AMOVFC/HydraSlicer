@@ -103,6 +103,7 @@
 #include "Jobs/PlaterWorker.hpp"
 #include "Jobs/BoostThreadWorker.hpp"
 #include "BackgroundSlicingProcess.hpp"
+#include "ParallelSlicingProcess.hpp"
 #include "SelectMachine.hpp"
 #include "SendMultiMachinePage.hpp"
 #include "SendToPrinter.hpp"
@@ -4278,6 +4279,8 @@ struct Plater::priv
     ProjectDirtyStateManager dirty_state;
 
     BackgroundSlicingProcess    background_process;
+    ParallelSlicingProcess      parallel_slicing_process;
+    bool m_parallel_slice_all{false};
     bool suppressed_backround_processing_update { false };
 
     // TODO: A mechanism would be useful for blocking the plater interactions:
@@ -4610,6 +4613,8 @@ struct Plater::priv
     void on_action_open_project(SimpleEvent&);
     void on_action_slice_plate(SimpleEvent&);
     void on_action_slice_all(SimpleEvent&);
+    void on_parallel_slicing_completed(ParallelSlicingCompletedEvent& evt);
+    void on_parallel_slicing_progress(ParallelSlicingProgressEvent& evt);
     void on_action_publish(wxCommandEvent &evt);
     void on_action_print_plate(SimpleEvent&);
     void on_action_print_all(SimpleEvent&);
@@ -5150,6 +5155,8 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
         q->Bind(EVT_GLVIEWTOOLBAR_PREVIEW, [q](SimpleEvent&) { q->select_view_3D("Preview", false); });
         q->Bind(EVT_GLTOOLBAR_SLICE_PLATE, &priv::on_action_slice_plate, this);
         q->Bind(EVT_GLTOOLBAR_SLICE_ALL, &priv::on_action_slice_all, this);
+        q->Bind(EVT_PARALLEL_SLICING_COMPLETED, &priv::on_parallel_slicing_completed, this);
+        q->Bind(EVT_PARALLEL_SLICING_PROGRESS, &priv::on_parallel_slicing_progress, this);
         q->Bind(EVT_GLTOOLBAR_PRINT_PLATE, &priv::on_action_print_plate, this);
         q->Bind(EVT_PRINT_FROM_SDCARD_VIEW, &priv::on_action_print_plate_from_sdcard, this);
         q->Bind(EVT_GLTOOLBAR_SELECT_SLICED_PLATE, &priv::on_action_select_sliced_plate, this);
@@ -7479,6 +7486,8 @@ void Plater::priv::schedule_auto_reslice_if_needed()
     if (background_process.running() || m_is_slicing) {
         // Remember to restart once the current slice stops and cancel it now.
         auto_reslice_after_cancel = true;
+        if (parallel_slicing_process.running())
+            parallel_slicing_process.cancel();
         background_process.stop();
         return;
     }
@@ -9798,27 +9807,115 @@ void Plater::priv::on_action_slice_plate(SimpleEvent&)
 //BBS: GUI refactor: slice all
 void Plater::priv::on_action_slice_all(SimpleEvent&)
 {
-    if (q != nullptr) {
-        BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << ":received slice project event\n" ;
-        //BBS update extruder params and speed table before slicing
-        const Slic3r::DynamicPrintConfig& config = wxGetApp().preset_bundle->full_config();
-        auto& print = q->get_partplate_list().get_current_fff_print();
-        auto print_config = print.config();
-        int numExtruders = wxGetApp().preset_bundle->filament_presets.size();
+    if (q == nullptr)
+        return;
 
-        Model::setExtruderParams(config, numExtruders);
-        Model::setPrintSpeedTable(config, print_config);
-        m_slice_all = true;
-        m_slice_all_only_has_gcode = true;
-        m_cur_slice_plate = 0;
-        //select plate
-        q->select_plate(m_cur_slice_plate);
-        q->reslice();
+    BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << ":received slice project event\n" ;
+    //BBS update extruder params and speed table before slicing
+    const Slic3r::DynamicPrintConfig& config = wxGetApp().preset_bundle->full_config();
+    auto& print = q->get_partplate_list().get_current_fff_print();
+    auto print_config = print.config();
+    int numExtruders = wxGetApp().preset_bundle->filament_presets.size();
+
+    Model::setExtruderParams(config, numExtruders);
+    Model::setPrintSpeedTable(config, print_config);
+
+    // Count printable plates to decide whether to use parallel slicing.
+    auto& plates = partplate_list.get_plate_list();
+    int printable_count = 0;
+    for (auto* plate : plates) {
+        if (plate && plate->has_printable_instances())
+            printable_count++;
+    }
+
+    // Use parallel slicing when there are multiple printable plates.
+    if (printable_count >= 2) {
+        BOOST_LOG_TRIVIAL(info) << "on_action_slice_all: using parallel slicing for "
+                                << printable_count << " plates";
+
+        m_parallel_slice_all = true;
+        m_is_slicing = true;
+        m_slice_all = false; // Not using sequential path.
+
+        parallel_slicing_process.set_event_handler(q);
+        parallel_slicing_process.set_thumbnail_cb(background_process.get_thumbnail_cb());
+
+        auto& preset_bundle = *wxGetApp().preset_bundle;
+        auto prep = parallel_slicing_process.prepare(
+            plates, this->model, preset_bundle.full_config(false), preset_bundle);
+
+        if (!prep.success) {
+            BOOST_LOG_TRIVIAL(error) << "ParallelSlicing: prepare failed for plate "
+                                     << prep.error_plate_index << ": " << prep.error_message;
+            m_parallel_slice_all = false;
+            m_is_slicing = false;
+            notification_manager->push_slicing_error_notification(prep.error_message, {});
+            return;
+        }
+
+        if (!parallel_slicing_process.start()) {
+            BOOST_LOG_TRIVIAL(error) << "ParallelSlicing: failed to start";
+            m_parallel_slice_all = false;
+            m_is_slicing = false;
+            return;
+        }
+
         if (!m_is_publishing)
             q->select_view_3D("Preview");
-        //BBS: wish to select all plates stats item
         preview->get_canvas3d()->_update_select_plate_toolbar_stats_item(true);
+        main_frame->update_slice_print_status(MainFrame::eEventSliceUpdate, false);
+        return;
     }
+
+    // Fallback: sequential slicing for single plate.
+    m_slice_all = true;
+    m_slice_all_only_has_gcode = true;
+    m_cur_slice_plate = 0;
+    //select plate
+    q->select_plate(m_cur_slice_plate);
+    q->reslice();
+    if (!m_is_publishing)
+        q->select_view_3D("Preview");
+    //BBS: wish to select all plates stats item
+    preview->get_canvas3d()->_update_select_plate_toolbar_stats_item(true);
+}
+
+void Plater::priv::on_parallel_slicing_completed(ParallelSlicingCompletedEvent& evt)
+{
+    BOOST_LOG_TRIVIAL(info) << "on_parallel_slicing_completed: all_succeeded=" << evt.all_succeeded();
+
+    m_parallel_slice_all = false;
+    m_is_slicing = false;
+
+    if (evt.any_error()) {
+        std::string error_msg = evt.first_error_message();
+        BOOST_LOG_TRIVIAL(error) << "ParallelSlicing error: " << error_msg;
+        notification_manager->push_slicing_error_notification(error_msg, {});
+        process_completed_with_error = 0;
+    } else {
+        process_completed_with_error = -1;
+        notification_manager->set_slicing_progress_hidden();
+    }
+
+    // Reload the preview to show all sliced plates.
+    this->preview->reload_print(false);
+    main_frame->update_slice_print_status(MainFrame::eEventSliceUpdate, true);
+    q->SetDropTarget(new PlaterDropTarget(*main_frame, *q));
+
+    if (m_is_publishing) {
+        if (m_publish_dlg && !m_publish_dlg->was_cancelled()) {
+            if (m_publish_dlg->IsShown()) {
+                q->publish_project();
+            } else {
+                m_is_publishing = false;
+            }
+        }
+    }
+}
+
+void Plater::priv::on_parallel_slicing_progress(ParallelSlicingProgressEvent& evt)
+{
+    notification_manager->set_slicing_progress_percentage(evt.message(), (float)evt.percent() / 100.f);
 }
 
 void Plater::priv::on_action_publish(wxCommandEvent &event)
