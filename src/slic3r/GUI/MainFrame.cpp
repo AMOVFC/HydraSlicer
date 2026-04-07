@@ -78,11 +78,13 @@
 #endif // _WIN32
 #include <thread>
 #include <slic3r/GUI/CreatePresetsDialog.hpp>
+#ifdef SLIC3R_ENABLE_HYDRA
 #include "HydraSettings.hpp"
 #include "HydraSyncManager.hpp"
 #include "HydraMoonrakerClient.hpp"
 #include "HydraPresetBundle.hpp"
 #include "HydraGitSync.hpp"
+#endif
 
 
 namespace Slic3r {
@@ -1660,6 +1662,7 @@ wxBoxSizer* MainFrame::create_side_tools()
 
     m_filament_group_popup = new FilamentGroupPopup(m_slice_btn);
 
+#ifdef SLIC3R_ENABLE_HYDRA
     m_hydra_status = new wxStaticText(this, wxID_ANY, _L("Hydra: in sync"));
     m_hydra_status->SetForegroundColour(*wxBLUE);
     sizer->Add(m_hydra_status, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(6));
@@ -1826,6 +1829,7 @@ wxBoxSizer* MainFrame::create_side_tools()
             Slic3r::Hydra::HydraSettings::Instance().save();
         }
     });
+#endif // SLIC3R_ENABLE_HYDRA
 
     auto try_hover_pop_up = [this]() {
 #ifdef __APPLE__
@@ -1880,7 +1884,9 @@ wxBoxSizer* MainFrame::create_side_tools()
             #endif
 
             if (slice) {
+#ifdef SLIC3R_ENABLE_HYDRA
                 Slic3r::Hydra::HydraSyncManager::Instance().OnPresetsPossiblyChanged(wxGetApp().preset_bundle->printers.get_selected_preset_name());
+#endif
                 if (m_slice_select == eSliceAll)
                     wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_SLICE_ALL));
                 else
@@ -1908,7 +1914,9 @@ wxBoxSizer* MainFrame::create_side_tools()
                 }
             }
             else if (m_print_select == eExportGcode) {
+#ifdef SLIC3R_ENABLE_HYDRA
                 Slic3r::Hydra::HydraSyncManager::Instance().OnPresetsPossiblyChanged(wxGetApp().preset_bundle->printers.get_selected_preset_name());
+#endif
                 wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_EXPORT_GCODE));
             }
             else if (m_print_select == eSendGcode)
@@ -2716,7 +2724,11 @@ void MainFrame::init_menubar_as_editor()
             [this]() {return can_export_all_gcode(); }, this);
 
         append_menu_item(export_menu, wxID_ANY, _L("Export G-code") + dots/* + "\t" + ctrl + "G"*/, _L("Export current plate as G-code"),
-            [this](wxCommandEvent&) { if (m_plater) { Slic3r::Hydra::HydraSyncManager::Instance().OnPresetsPossiblyChanged(wxGetApp().preset_bundle->printers.get_selected_preset_name()); m_plater->export_gcode(false); } }, "menu_export_gcode", nullptr,
+            [this](wxCommandEvent&) { if (m_plater) {
+#ifdef SLIC3R_ENABLE_HYDRA
+                Slic3r::Hydra::HydraSyncManager::Instance().OnPresetsPossiblyChanged(wxGetApp().preset_bundle->printers.get_selected_preset_name());
+#endif
+                m_plater->export_gcode(false); } }, "menu_export_gcode", nullptr,
             [this]() {return can_export_gcode(); }, this);
 
         append_menu_item(export_menu, wxID_ANY, _L("Export toolpaths as OBJ") + dots, _L("Export toolpaths as OBJ"),
@@ -3423,6 +3435,7 @@ void MainFrame::init_menubar_as_editor()
 
     m_menubar->Append(calib_menu,wxString::Format("&%s", _L("Calibration")));
 
+#ifdef SLIC3R_ENABLE_HYDRA
     // HydraSlicer: Account menu
     auto hydra_menu = new wxMenu();
     append_menu_item(hydra_menu, wxID_ANY, _L("Sign In..."), _L("Sign in with GitHub or Google"),
@@ -3438,6 +3451,7 @@ void MainFrame::init_menubar_as_editor()
         }, "", nullptr,
         [this]() { return wxGetApp().is_hydra_logged_in(); }, this);
     m_menubar->Append(hydra_menu, wxString::Format("&%s", _L("Account")));
+#endif // SLIC3R_ENABLE_HYDRA
 
     if (helpMenu)
         m_menubar->Append(helpMenu, wxString::Format("&%s", _L("Help")));

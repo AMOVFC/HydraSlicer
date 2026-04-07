@@ -404,7 +404,9 @@ public:
     SideButton* m_print_option_btn{ nullptr };
 
     SidePopup*  m_slice_option_pop_up{ nullptr };
+#ifdef SLIC3R_ENABLE_HYDRA
     wxStaticText* m_hydra_status{ nullptr };
+#endif
 
     FilamentGroupPopup* m_filament_group_popup{ nullptr };
     mutable bool          m_slice_enable{ true };

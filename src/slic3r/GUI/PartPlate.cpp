@@ -242,6 +242,7 @@ void PartPlate::reset_skirt_start_angle()
     m_config.erase("skirt_start_angle");
 }
 
+#ifdef SLIC3R_ENABLE_HYDRA
 // HydraSlicer: Build a full config for this plate using per-plate preset overrides.
 // If no overrides are set, falls back to the global PresetBundle config.
 DynamicPrintConfig PartPlate::build_full_config(const PresetBundle& bundle) const
@@ -318,6 +319,7 @@ std::string PartPlate::get_printer_preset_name(const PresetBundle& bundle) const
     }
     return bundle.printers.get_selected_preset_name();
 }
+#endif // SLIC3R_ENABLE_HYDRA
 
 void PartPlate::set_print_seq(PrintSequence print_seq)
 {
@@ -6035,11 +6037,13 @@ int PartPlateList::store_to_3mf_structure(PlateDataPtrs& plate_data_list, bool w
 			%(i+1) %plate_data_item->plate_thumbnail.width %plate_data_item->plate_thumbnail.height %plate_data_item->plate_thumbnail.pixels.size();
 		plate_data_item->config.apply(*m_plate_list[i]->config());
 
+#ifdef SLIC3R_ENABLE_HYDRA
 		// HydraSlicer: Store per-plate preset overrides
 		const auto& override = m_plate_list[i]->get_preset_override();
 		plate_data_item->plate_printer_preset = override.printer_preset_name;
 		plate_data_item->plate_process_preset = override.process_preset_name;
 		plate_data_item->plate_filament_presets = override.filament_preset_names;
+#endif
 
 		if (m_plate_list[i]->no_light_thumbnail_data.is_valid())
 			plate_data_item->no_light_thumbnail_file = "valid_no_light";
@@ -6123,6 +6127,7 @@ int PartPlateList::load_from_3mf_structure(PlateDataPtrs& plate_data_list, int f
 		m_plate_list[index]->config()->apply(plate_data_list[i]->config);
 		m_plate_list[index]->set_plate_name(plate_data_list[i]->plate_name);
 
+#ifdef SLIC3R_ENABLE_HYDRA
 		// HydraSlicer: Load per-plate preset overrides
 		{
 			PlatePresetOverride override;
@@ -6131,6 +6136,7 @@ int PartPlateList::load_from_3mf_structure(PlateDataPtrs& plate_data_list, int f
 			override.filament_preset_names = plate_data_list[i]->plate_filament_presets;
 			m_plate_list[index]->set_preset_override(override);
 		}
+#endif
 		if (plate_data_list[i]->plate_index != index)
 		{
 			BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":plate index %1% seems invalid, skip it")% plate_data_list[i]->plate_index;

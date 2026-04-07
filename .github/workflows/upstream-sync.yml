@@ -1,0 +1,208 @@
+# Sync upstream OrcaSlicer into HydraSlicer daily.
+#
+# Strategy:
+#   1. Fetch latest upstream OrcaSlicer main branch
+#   2. Attempt to merge upstream into a sync branch
+#   3. If clean → push sync branch, open PR to main
+#   4. If conflicts → push partial branch, open PR with conflict details
+#
+# The PR is always created so a human can review/resolve.
+# This never force-pushes or modifies main directly.
+
+name: Upstream Sync
+
+on:
+  schedule:
+    # Run daily at 06:00 UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: 'Upstream ref to sync (default: main)'
+        required: false
+        default: 'main'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  UPSTREAM_REPO: https://github.com/SoftFever/OrcaSlicer.git
+  SYNC_BRANCH_PREFIX: sync/upstream
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout HydraSlicer
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote and fetch
+        run: |
+          git remote add upstream "${{ env.UPSTREAM_REPO }}" || true
+          git fetch upstream ${{ inputs.upstream_ref || 'main' }} --no-tags
+
+      - name: Determine sync branch name
+        id: branch
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          UPSTREAM_SHA=$(git rev-parse --short upstream/${{ inputs.upstream_ref || 'main' }})
+          BRANCH="${{ env.SYNC_BRANCH_PREFIX }}-${DATE}-${UPSTREAM_SHA}"
+          echo "name=${BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "date=${DATE}" >> "$GITHUB_OUTPUT"
+          echo "upstream_sha=${UPSTREAM_SHA}" >> "$GITHUB_OUTPUT"
+          echo "upstream_full_sha=$(git rev-parse upstream/${{ inputs.upstream_ref || 'main' }})" >> "$GITHUB_OUTPUT"
+
+      - name: Create sync branch and attempt merge
+        id: merge
+        run: |
+          BRANCH="${{ steps.branch.outputs.name }}"
+          git checkout -b "${BRANCH}" origin/main
+
+          # Attempt the merge
+          if git merge "upstream/${{ inputs.upstream_ref || 'main' }}" \
+               --no-edit \
+               -m "Merge upstream OrcaSlicer ${{ steps.branch.outputs.upstream_sha }} into HydraSlicer"; then
+            echo "status=clean" >> "$GITHUB_OUTPUT"
+            echo "✅ Merge completed cleanly"
+          else
+            echo "status=conflicts" >> "$GITHUB_OUTPUT"
+
+            # Collect conflict details
+            CONFLICTS=$(git diff --name-only --diff-filter=U)
+            echo "conflicted_files<<EOF" >> "$GITHUB_OUTPUT"
+            echo "${CONFLICTS}" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+
+            CONFLICT_COUNT=$(echo "${CONFLICTS}" | wc -l)
+            echo "conflict_count=${CONFLICT_COUNT}" >> "$GITHUB_OUTPUT"
+
+            # Show conflict markers for the PR body
+            CONFLICT_DETAILS=""
+            for file in ${CONFLICTS}; do
+              MARKERS=$(grep -c "^<<<<<<< " "${file}" 2>/dev/null || echo "0")
+              CONFLICT_DETAILS="${CONFLICT_DETAILS}\n- \`${file}\` (${MARKERS} conflict regions)"
+            done
+            echo "conflict_details<<EOF" >> "$GITHUB_OUTPUT"
+            echo -e "${CONFLICT_DETAILS}" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+
+            # Stage everything (including conflicts) so we can commit
+            git add -A
+            git commit --no-verify -m "WIP: Merge upstream OrcaSlicer ${{ steps.branch.outputs.upstream_sha }} (has conflicts)
+
+            This merge has conflicts that need manual resolution.
+            Conflicted files:
+            ${CONFLICTS}"
+
+            echo "⚠️ Merge has ${CONFLICT_COUNT} conflicted files"
+          fi
+
+      - name: Push sync branch
+        run: |
+          BRANCH="${{ steps.branch.outputs.name }}"
+          git push -u origin "${BRANCH}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create PR (clean merge)
+        if: steps.merge.outputs.status == 'clean'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `⬆️ Upstream sync: OrcaSlicer ${process.env.UPSTREAM_SHA}`,
+              head: process.env.BRANCH,
+              base: 'main',
+              body: [
+                '## Upstream Sync',
+                '',
+                `Merges latest OrcaSlicer [\`${process.env.UPSTREAM_SHA}\`](https://github.com/SoftFever/OrcaSlicer/commit/${process.env.UPSTREAM_FULL_SHA}) into HydraSlicer.`,
+                '',
+                '**Status:** ✅ Clean merge — no conflicts.',
+                '',
+                '### Review checklist',
+                '- [ ] Skim changed files for anything that could break Hydra features',
+                '- [ ] Check if any modified files overlap with `#ifdef SLIC3R_ENABLE_HYDRA` blocks',
+                '- [ ] Merge when ready',
+                '',
+                '*Auto-generated by the upstream-sync workflow.*',
+              ].join('\n'),
+            });
+            console.log(`Created PR #${pr.number}: ${pr.html_url}`);
+        env:
+          BRANCH: ${{ steps.branch.outputs.name }}
+          UPSTREAM_SHA: ${{ steps.branch.outputs.upstream_sha }}
+          UPSTREAM_FULL_SHA: ${{ steps.branch.outputs.upstream_full_sha }}
+
+      - name: Create PR (conflicts)
+        if: steps.merge.outputs.status == 'conflicts'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `⚠️ Upstream sync: OrcaSlicer ${process.env.UPSTREAM_SHA} (conflicts)`,
+              head: process.env.BRANCH,
+              base: 'main',
+              draft: true,
+              body: [
+                '## Upstream Sync — Manual Resolution Needed',
+                '',
+                `Attempted to merge OrcaSlicer [\`${process.env.UPSTREAM_SHA}\`](https://github.com/SoftFever/OrcaSlicer/commit/${process.env.UPSTREAM_FULL_SHA}) into HydraSlicer.`,
+                '',
+                `**Status:** ⚠️ ${process.env.CONFLICT_COUNT} files have merge conflicts.`,
+                '',
+                '### Conflicted files',
+                process.env.CONFLICT_DETAILS,
+                '',
+                '### How to resolve',
+                '```bash',
+                `git fetch origin ${process.env.BRANCH}`,
+                `git checkout ${process.env.BRANCH}`,
+                '',
+                '# Fix conflicts in each file, then:',
+                'git add <resolved-file>',
+                'git commit',
+                'git push',
+                '```',
+                '',
+                '### Tips',
+                '- Conflicts in `Plater.cpp` or `MainFrame.cpp` are common — look for `#ifdef SLIC3R_ENABLE_HYDRA` blocks',
+                '- If upstream restructured a function that Hydra modifies, re-apply the Hydra changes inside the new structure',
+                '- Run a build after resolving to verify: `cmake --build build/ --config RelWithDebInfo`',
+                '',
+                '*Auto-generated by the upstream-sync workflow.*',
+              ].join('\n'),
+            });
+
+            // Add labels if they exist
+            try {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                labels: ['upstream-sync', 'needs-resolution'],
+              });
+            } catch (e) {
+              console.log('Could not add labels (they may not exist yet):', e.message);
+            }
+
+            console.log(`Created draft PR #${pr.number}: ${pr.html_url}`);
+        env:
+          BRANCH: ${{ steps.branch.outputs.name }}
+          UPSTREAM_SHA: ${{ steps.branch.outputs.upstream_sha }}
+          UPSTREAM_FULL_SHA: ${{ steps.branch.outputs.upstream_full_sha }}
+          CONFLICT_COUNT: ${{ steps.merge.outputs.conflict_count }}
+          CONFLICT_DETAILS: ${{ steps.merge.outputs.conflict_details }}

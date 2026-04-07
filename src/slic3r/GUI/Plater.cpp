@@ -88,8 +88,10 @@
 #include "3DBed.hpp"
 #include "PartPlate.hpp"
 #include "Camera.hpp"
+#ifdef SLIC3R_ENABLE_HYDRA
 #include "HydraSyncManager.hpp"
 #include "HydraPlatePlan.hpp"
+#endif
 #include "Mouse3DController.hpp"
 #include "Tab.hpp"
 #include "Jobs/OrientJob.hpp"
@@ -103,7 +105,9 @@
 #include "Jobs/PlaterWorker.hpp"
 #include "Jobs/BoostThreadWorker.hpp"
 #include "BackgroundSlicingProcess.hpp"
+#ifdef SLIC3R_ENABLE_HYDRA
 #include "ParallelSlicingProcess.hpp"
+#endif
 #include "SelectMachine.hpp"
 #include "SendMultiMachinePage.hpp"
 #include "SendToPrinter.hpp"
@@ -4279,8 +4283,10 @@ struct Plater::priv
     ProjectDirtyStateManager dirty_state;
 
     BackgroundSlicingProcess    background_process;
+#ifdef SLIC3R_ENABLE_HYDRA
     ParallelSlicingProcess      parallel_slicing_process;
     bool m_parallel_slice_all{false};
+#endif
     bool suppressed_backround_processing_update { false };
 
     // TODO: A mechanism would be useful for blocking the plater interactions:
@@ -4613,8 +4619,10 @@ struct Plater::priv
     void on_action_open_project(SimpleEvent&);
     void on_action_slice_plate(SimpleEvent&);
     void on_action_slice_all(SimpleEvent&);
+#ifdef SLIC3R_ENABLE_HYDRA
     void on_parallel_slicing_completed(ParallelSlicingCompletedEvent& evt);
     void on_parallel_slicing_progress(ParallelSlicingProgressEvent& evt);
+#endif
     void on_action_publish(wxCommandEvent &evt);
     void on_action_print_plate(SimpleEvent&);
     void on_action_print_all(SimpleEvent&);
@@ -5155,8 +5163,10 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
         q->Bind(EVT_GLVIEWTOOLBAR_PREVIEW, [q](SimpleEvent&) { q->select_view_3D("Preview", false); });
         q->Bind(EVT_GLTOOLBAR_SLICE_PLATE, &priv::on_action_slice_plate, this);
         q->Bind(EVT_GLTOOLBAR_SLICE_ALL, &priv::on_action_slice_all, this);
+#ifdef SLIC3R_ENABLE_HYDRA
         q->Bind(EVT_PARALLEL_SLICING_COMPLETED, &priv::on_parallel_slicing_completed, this);
         q->Bind(EVT_PARALLEL_SLICING_PROGRESS, &priv::on_parallel_slicing_progress, this);
+#endif
         q->Bind(EVT_GLTOOLBAR_PRINT_PLATE, &priv::on_action_print_plate, this);
         q->Bind(EVT_PRINT_FROM_SDCARD_VIEW, &priv::on_action_print_plate_from_sdcard, this);
         q->Bind(EVT_GLTOOLBAR_SELECT_SLICED_PLATE, &priv::on_action_select_sliced_plate, this);
@@ -7486,8 +7496,10 @@ void Plater::priv::schedule_auto_reslice_if_needed()
     if (background_process.running() || m_is_slicing) {
         // Remember to restart once the current slice stops and cancel it now.
         auto_reslice_after_cancel = true;
+#ifdef SLIC3R_ENABLE_HYDRA
         if (parallel_slicing_process.running())
             parallel_slicing_process.cancel();
+#endif
         background_process.stop();
         return;
     }
@@ -7667,6 +7679,7 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
     const auto& preset_bundle = wxGetApp().preset_bundle;
     PartPlate* cur_plate = background_process.get_current_plate();
 
+#ifdef SLIC3R_ENABLE_HYDRA
     // HydraSlicer: Use per-plate config if the plate has preset overrides
     DynamicPrintConfig plate_config;
     if (cur_plate && cur_plate->has_preset_override()) {
@@ -7679,7 +7692,9 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
         invalidated = background_process.apply(this->model, std::move(plate_config));
         if (preset_bundle->get_printer_extruder_count() > 1)
             background_process.fff_print()->set_extruder_filament_info(get_extruder_filament_info());
-    } else if (preset_bundle->get_printer_extruder_count() > 1) {
+    } else
+#endif
+    if (preset_bundle->get_printer_extruder_count() > 1) {
         std::vector<int> f_maps = cur_plate->get_real_filament_maps(preset_bundle->project_config);
         invalidated = background_process.apply(this->model, preset_bundle->full_config(false, f_maps));
         background_process.fff_print()->set_extruder_filament_info(get_extruder_filament_info());
@@ -9281,7 +9296,9 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
      * and for SLA presets they should be deleted
      */
         wxGetApp().obj_list()->update_object_list_by_printer_technology();
+#ifdef SLIC3R_ENABLE_HYDRA
         Slic3r::Hydra::HydraSyncManager::Instance().OnPrinterActivated(wxGetApp().preset_bundle->printers.get_selected_preset_name());
+#endif
 
         // BBS:Model reset by plate center
         PartPlateList& cur_plate_list = this->partplate_list;
@@ -9820,6 +9837,7 @@ void Plater::priv::on_action_slice_all(SimpleEvent&)
     Model::setExtruderParams(config, numExtruders);
     Model::setPrintSpeedTable(config, print_config);
 
+#ifdef SLIC3R_ENABLE_HYDRA
     // Count printable plates to decide whether to use parallel slicing.
     auto& plates = partplate_list.get_plate_list();
     int printable_count = 0;
@@ -9866,8 +9884,8 @@ void Plater::priv::on_action_slice_all(SimpleEvent&)
         main_frame->update_slice_print_status(MainFrame::eEventSliceUpdate, false);
         return;
     }
+#endif // SLIC3R_ENABLE_HYDRA
 
-    // Fallback: sequential slicing for single plate.
     m_slice_all = true;
     m_slice_all_only_has_gcode = true;
     m_cur_slice_plate = 0;
@@ -9880,6 +9898,7 @@ void Plater::priv::on_action_slice_all(SimpleEvent&)
     preview->get_canvas3d()->_update_select_plate_toolbar_stats_item(true);
 }
 
+#ifdef SLIC3R_ENABLE_HYDRA
 void Plater::priv::on_parallel_slicing_completed(ParallelSlicingCompletedEvent& evt)
 {
     BOOST_LOG_TRIVIAL(info) << "on_parallel_slicing_completed: all_succeeded=" << evt.all_succeeded();
@@ -9917,6 +9936,7 @@ void Plater::priv::on_parallel_slicing_progress(ParallelSlicingProgressEvent& ev
 {
     notification_manager->set_slicing_progress_percentage(evt.message(), (float)evt.percent() / 100.f);
 }
+#endif // SLIC3R_ENABLE_HYDRA
 
 void Plater::priv::on_action_publish(wxCommandEvent &event)
 {
@@ -17117,11 +17137,14 @@ void Plater::apply_background_progress()
     const auto& preset_bundle = wxGetApp().preset_bundle;
     //always apply the current plate's print
     Print::ApplyStatus invalidated;
+#ifdef SLIC3R_ENABLE_HYDRA
     // HydraSlicer: Use per-plate config if the plate has preset overrides
     if (part_plate && part_plate->has_preset_override()) {
         DynamicPrintConfig plate_config = part_plate->build_full_config(*preset_bundle);
         invalidated = p->background_process.apply(this->model(), std::move(plate_config));
-    } else if (preset_bundle->get_printer_extruder_count() > 1) {
+    } else
+#endif
+    if (preset_bundle->get_printer_extruder_count() > 1) {
         std::vector<int> f_maps = part_plate->get_real_filament_maps(preset_bundle->project_config);
         invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps));
     }
@@ -17166,11 +17189,14 @@ int Plater::select_plate(int plate_index, bool need_slice)
         part_plate->get_print(&print, &gcode_result, NULL);
 
         //always apply the current plate's print
+#ifdef SLIC3R_ENABLE_HYDRA
         // HydraSlicer: Use per-plate config if the plate has preset overrides
         if (part_plate && part_plate->has_preset_override()) {
             DynamicPrintConfig plate_config = part_plate->build_full_config(*preset_bundle);
             invalidated = p->background_process.apply(this->model(), std::move(plate_config));
-        } else if (preset_bundle->get_printer_extruder_count() > 1) {
+        } else
+#endif
+        if (preset_bundle->get_printer_extruder_count() > 1) {
             std::vector<int> f_maps = part_plate->get_real_filament_maps(preset_bundle->project_config);
             invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps));
         }
@@ -17488,6 +17514,7 @@ void Plater::open_platesettings_dialog(wxCommandEvent& evt) {
             curr_plate->set_spiral_vase_mode(false, true);
         }
 
+#ifdef SLIC3R_ENABLE_HYDRA
         // HydraSlicer: Apply preset overrides from dialog
         PlatePresetOverride new_override = dlg.get_preset_override();
         PlatePresetOverride old_override = curr_plate->get_preset_override();
@@ -17500,6 +17527,7 @@ void Plater::open_platesettings_dialog(wxCommandEvent& evt) {
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format("set printer override '%1%', process override '%2%' for plate %3%")
                 % new_override.printer_preset_name % new_override.process_preset_name % plate_index;
         }
+#endif // SLIC3R_ENABLE_HYDRA
 
         update_project_dirty_from_presets();
         set_plater_dirty(true);
@@ -17608,11 +17636,14 @@ int Plater::select_plate_by_hover_id(int hover_id, bool right_click, bool isModi
 
             part_plate->get_print(&print, &gcode_result, NULL);
             //always apply the current plate's print
+#ifdef SLIC3R_ENABLE_HYDRA
             // HydraSlicer: Use per-plate config if the plate has preset overrides
             if (part_plate && part_plate->has_preset_override()) {
                 DynamicPrintConfig plate_config = part_plate->build_full_config(*preset_bundle);
                 invalidated = p->background_process.apply(this->model(), std::move(plate_config));
-            } else if (preset_bundle->get_printer_extruder_count() > 1) {
+            } else
+#endif
+            if (preset_bundle->get_printer_extruder_count() > 1) {
                 std::vector<int> f_maps = part_plate->get_real_filament_maps(preset_bundle->project_config);
                 invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps));
             }

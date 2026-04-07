@@ -4238,6 +4238,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 std::istringstream(value) >> std::boolalpha >> spiral_mode;
                 m_curr_plater->config.set_key_value("spiral_mode", new ConfigOptionBool(spiral_mode));
             }
+#ifdef SLIC3R_ENABLE_HYDRA
             // HydraSlicer: Per-plate preset overrides for multi-printer slicing
             else if (key == "plate_printer_preset") {
                 m_curr_plater->plate_printer_preset = xml_unescape(value.c_str());
@@ -4255,6 +4256,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                         m_curr_plater->plate_filament_presets.push_back(token);
                 }
             }
+#endif // SLIC3R_ENABLE_HYDRA
             else if (key == FILAMENT_MAP_MODE_ATTR)
             {
                 FilamentMapMode map_mode = FilamentMapMode::fmmAutoForFlush;
@@ -7736,6 +7738,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 if (spiral_mode_opt)
                     stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << SPIRAL_VASE_MODE << "\" " << VALUE_ATTR << "=\"" << spiral_mode_opt->getBool() << "\"/>\n";
 
+#ifdef SLIC3R_ENABLE_HYDRA
                 // HydraSlicer: Per-plate preset overrides for multi-printer slicing
                 if (!plate_data->plate_printer_preset.empty())
                     stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"plate_printer_preset\" " << VALUE_ATTR << "=\"" << xml_escape(plate_data->plate_printer_preset) << "\"/>\n";
@@ -7749,6 +7752,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                     }
                     stream << "\"/>\n";
                 }
+#endif // SLIC3R_ENABLE_HYDRA
 
                 //filament map related
                 ConfigOption* filament_map_mode_opt = plate_data->config.option("filament_map_mode");
