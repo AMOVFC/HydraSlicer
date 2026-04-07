@@ -1,4 +1,4 @@
-# Sync upstream OrcaSlicer into HydraSlicer daily.
+# Sync upstream OrcaSlicer into HydraSlicer on every push to main + daily.
 #
 # Strategy:
 #   1. Fetch latest upstream OrcaSlicer main branch
@@ -12,6 +12,8 @@
 name: Upstream Sync
 
 on:
+  push:
+    branches: [main]
   schedule:
     # Run daily at 06:00 UTC
     - cron: '0 6 * * *'
@@ -45,12 +47,40 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: Check for existing open sync PR
+        id: existing
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              head: `${context.repo.owner}:${process.env.SYNC_BRANCH_PREFIX}`,
+            });
+            // Also search with broader prefix match
+            const { data: allPrs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+            });
+            const syncPrs = allPrs.filter(pr => pr.head.ref.startsWith('sync/upstream'));
+            if (syncPrs.length > 0) {
+              console.log(`Found ${syncPrs.length} open sync PR(s): ${syncPrs.map(p => '#' + p.number).join(', ')}`);
+              console.log('Skipping to avoid duplicates. Merge or close existing PRs first.');
+              core.setOutput('skip', 'true');
+            } else {
+              core.setOutput('skip', 'false');
+            }
+
       - name: Add upstream remote and fetch
+        if: steps.existing.outputs.skip != 'true'
         run: |
           git remote add upstream "${{ env.UPSTREAM_REPO }}" || true
           git fetch upstream ${{ inputs.upstream_ref || 'main' }} --no-tags
 
       - name: Determine sync branch name
+        if: steps.existing.outputs.skip != 'true'
         id: branch
         run: |
           DATE=$(date +%Y-%m-%d)
@@ -62,6 +92,7 @@ jobs:
           echo "upstream_full_sha=$(git rev-parse upstream/${{ inputs.upstream_ref || 'main' }})" >> "$GITHUB_OUTPUT"
 
       - name: Create sync branch and attempt merge
+        if: steps.existing.outputs.skip != 'true'
         id: merge
         run: |
           BRANCH="${{ steps.branch.outputs.name }}"
@@ -107,6 +138,7 @@ jobs:
           fi
 
       - name: Push sync branch
+        if: steps.existing.outputs.skip != 'true'
         run: |
           BRANCH="${{ steps.branch.outputs.name }}"
           git push -u origin "${BRANCH}"
@@ -114,7 +146,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create PR (clean merge)
-        if: steps.merge.outputs.status == 'clean'
+        if: steps.existing.outputs.skip != 'true' && steps.merge.outputs.status == 'clean'
         uses: actions/github-script@v7
         with:
           script: |
@@ -146,7 +178,7 @@ jobs:
           UPSTREAM_FULL_SHA: ${{ steps.branch.outputs.upstream_full_sha }}
 
       - name: Create PR (conflicts)
-        if: steps.merge.outputs.status == 'conflicts'
+        if: steps.existing.outputs.skip != 'true' && steps.merge.outputs.status == 'conflicts'
         uses: actions/github-script@v7
         with:
           script: |
