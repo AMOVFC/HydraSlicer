@@ -1,7 +1,9 @@
 #include "libslic3r/Technologies.hpp"
 #include "GUI_App.hpp"
 #include "GUI_Init.hpp"
+#ifdef SLIC3R_ENABLE_HYDRA
 #include "HydraLoginDialog.hpp"
+#endif
 #include "GUI_ObjectList.hpp"
 #include "GUI_Factories.hpp"
 #include "slic3r/GUI/UserManager.hpp"
@@ -4413,6 +4415,7 @@ wxString GUI_App::transition_tridid(int trid_id) const
     }
 }
 
+#ifdef SLIC3R_ENABLE_HYDRA
 // HydraSlicer: Show the Supabase login dialog with GitHub/Google
 void GUI_App::show_hydra_login_dialog()
 {
@@ -4440,6 +4443,7 @@ void GUI_App::show_hydra_login_dialog()
         }
     }
 }
+#endif // SLIC3R_ENABLE_HYDRA
 
 //BBS
 void GUI_App::request_login(bool show_user_info)

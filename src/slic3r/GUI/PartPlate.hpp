@@ -75,6 +75,7 @@ class PartPlateList;
 
 using GCodeResult = GCodeProcessorResult;
 
+#ifdef SLIC3R_ENABLE_HYDRA
 // Per-plate preset overrides for multi-printer slicing.
 // When a field is non-empty, that preset is used instead of the global selection.
 struct PlatePresetOverride {
@@ -94,6 +95,7 @@ struct PlatePresetOverride {
         filament_preset_names.clear();
     }
 };
+#endif // SLIC3R_ENABLE_HYDRA
 
 class PartPlate : public ObjectBase
 {
@@ -179,8 +181,10 @@ private:
     // BBS
     DynamicPrintConfig m_config;
 
+#ifdef SLIC3R_ENABLE_HYDRA
     // HydraSlicer: per-plate preset overrides for multi-printer slicing
     PlatePresetOverride m_preset_override;
+#endif
 
     // SoftFever
     // part plate name
@@ -266,19 +270,23 @@ public:
 
     DynamicPrintConfig* config() { return &m_config; }
 
+#ifdef SLIC3R_ENABLE_HYDRA
     // HydraSlicer: per-plate preset overrides for multi-printer slicing
     const PlatePresetOverride& get_preset_override() const { return m_preset_override; }
     PlatePresetOverride& get_preset_override() { return m_preset_override; }
     void set_preset_override(const PlatePresetOverride& override) { m_preset_override = override; }
     void clear_preset_override() { m_preset_override.clear(); }
     bool has_preset_override() const { return m_preset_override.has_any_override(); }
+#endif
 
+#ifdef SLIC3R_ENABLE_HYDRA
     // Build a full DynamicPrintConfig for this plate, using per-plate preset overrides
     // if set, otherwise falling back to the global PresetBundle selections.
     DynamicPrintConfig build_full_config(const PresetBundle& bundle) const;
 
     // Get the printer preset name for this plate (override or global)
     std::string get_printer_preset_name(const PresetBundle& bundle) const;
+#endif
 
     // set print sequence per plate
     //bool print_seq_same_global = true;
@@ -563,8 +571,11 @@ public:
         std::vector<std::pair<int, int>>	objects_and_instances;
         std::vector<std::pair<int, int>>	instances_outside;
 
-        ar(m_plate_index, m_name, m_print_index, m_origin, m_width, m_depth, m_height, m_locked, m_selected, m_ready_for_slice, m_slice_result_valid, m_apply_invalid, m_printable, m_tmp_gcode_path, objects_and_instances, instances_outside, m_config,
-           m_preset_override.printer_preset_name, m_preset_override.process_preset_name, m_preset_override.filament_preset_names);
+        ar(m_plate_index, m_name, m_print_index, m_origin, m_width, m_depth, m_height, m_locked, m_selected, m_ready_for_slice, m_slice_result_valid, m_apply_invalid, m_printable, m_tmp_gcode_path, objects_and_instances, instances_outside, m_config
+#ifdef SLIC3R_ENABLE_HYDRA
+           , m_preset_override.printer_preset_name, m_preset_override.process_preset_name, m_preset_override.filament_preset_names
+#endif
+        );
 
         for (std::vector<std::pair<int, int>>::iterator it = objects_and_instances.begin(); it != objects_and_instances.end(); ++it)
             obj_to_instance_set.insert(std::pair(it->first, it->second));
@@ -582,8 +593,11 @@ public:
         for (std::set<std::pair<int, int>>::iterator it = obj_to_instance_set.begin(); it != obj_to_instance_set.end(); ++it)
             objects_and_instances.emplace_back(it->first, it->second);
 
-        ar(m_plate_index, m_name, m_print_index, m_origin, m_width, m_depth, m_height, m_locked, m_selected, m_ready_for_slice, m_slice_result_valid, m_apply_invalid, m_printable, m_tmp_gcode_path, objects_and_instances, instances_outside, m_config,
-           m_preset_override.printer_preset_name, m_preset_override.process_preset_name, m_preset_override.filament_preset_names);
+        ar(m_plate_index, m_name, m_print_index, m_origin, m_width, m_depth, m_height, m_locked, m_selected, m_ready_for_slice, m_slice_result_valid, m_apply_invalid, m_printable, m_tmp_gcode_path, objects_and_instances, instances_outside, m_config
+#ifdef SLIC3R_ENABLE_HYDRA
+           , m_preset_override.printer_preset_name, m_preset_override.process_preset_name, m_preset_override.filament_preset_names
+#endif
+        );
     }
     /*template<class Archive> void serialize(Archive& ar)
     {
