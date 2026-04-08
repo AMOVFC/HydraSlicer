@@ -27,7 +27,8 @@ on:
 permissions:
   contents: write
   pull-requests: write
-
+  actions: write
+  
 env:
   UPSTREAM_REPO: https://github.com/SoftFever/OrcaSlicer.git
   SYNC_BRANCH_PREFIX: sync/upstream
