@@ -1,10 +1,5 @@
 <div align="center">
 
-<!-- TODO: Replace with HydraSlicer logo when available -->
-<picture>
-  <img alt="HydraSlicer logo" src="resources/images/OrcaSlicer.png" width="15%" height="15%">
-</picture>
-
 # HydraSlicer
 
 **A feature fork of [OrcaSlicer](https://github.com/SoftFever/OrcaSlicer) built for Klipper power users and multi-printer workflows.**
