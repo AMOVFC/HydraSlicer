@@ -76,14 +76,11 @@
 #include <shlobj.h>
 #include <shellapi.h>
 #endif // _WIN32
-<<<<<<< HEAD
 #include <thread>
-=======
 
 #ifdef __WXGTK__
 #include <gtk/gtk.h>
 #endif // __WXGTK__
->>>>>>> upstream/main
 #include <slic3r/GUI/CreatePresetsDialog.hpp>
 #ifdef SLIC3R_ENABLE_HYDRA
 #include "HydraSettings.hpp"
