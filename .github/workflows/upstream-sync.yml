@@ -99,6 +99,10 @@ jobs:
           BRANCH="${{ steps.branch.outputs.name }}"
           git checkout -b "${BRANCH}" origin/main
 
+          # Record pre-merge state so we can restore protected files later
+          PRE_MERGE_SHA=$(git rev-parse HEAD)
+          echo "pre_merge_sha=${PRE_MERGE_SHA}" >> "$GITHUB_OUTPUT"
+
           # Attempt the merge
           if git merge "upstream/${{ inputs.upstream_ref || 'main' }}" \
                --no-edit \
@@ -127,15 +131,97 @@ jobs:
             echo -e "${CONFLICT_DETAILS}" >> "$GITHUB_OUTPUT"
             echo "EOF" >> "$GITHUB_OUTPUT"
 
-            # Stage everything (including conflicts) so we can commit
-            git add -A
+            echo "⚠️ Merge has ${CONFLICT_COUNT} conflicted files"
+          fi
+
+      - name: Restore protected HydraSlicer files
+        if: steps.existing.outputs.skip != 'true'
+        id: protect
+        run: |
+          PRE_MERGE_SHA="${{ steps.merge.outputs.pre_merge_sha }}"
+
+          # Protected paths: HydraSlicer-specific files and directories that must
+          # never be overwritten by upstream OrcaSlicer changes.
+          # Directories MUST end with a trailing slash.
+          PROTECTED_PATHS=(
+            "README.md"
+            "CLAUDE.md"
+            "AGENTS.md"
+            "README.hydra.md"
+            "task.md"
+            ".github/workflows/"
+            ".github/dependabot.yml"
+            ".github/FUNDING.yml"
+            ".github/pull_request_template.md"
+            ".devcontainer/"
+          )
+
+          RESTORED_FILES=()
+          RESTORE_COUNT=0
+
+          for path in "${PROTECTED_PATHS[@]}"; do
+            # Check if any files exist under this path at the pre-merge SHA
+            FILES_AT_SHA=$(git ls-tree -r --name-only "${PRE_MERGE_SHA}" -- "${path}" 2>/dev/null)
+            if [ -z "${FILES_AT_SHA}" ]; then
+              echo "⏭️  Skipping ${path} (not present in HydraSlicer branch)"
+              continue
+            fi
+
+            if [[ "${path}" == */ ]]; then
+              # Directory: remove everything (including upstream additions), then restore ours
+              echo "🔒 Restoring directory: ${path}"
+              git rm -rf --quiet "${path}" 2>/dev/null || true
+              rm -rf "${path}" 2>/dev/null || true
+              git checkout "${PRE_MERGE_SHA}" -- "${path}"
+            else
+              # Single file: restore our version
+              echo "🔒 Restoring file: ${path}"
+              git checkout "${PRE_MERGE_SHA}" -- "${path}"
+            fi
+
+            while IFS= read -r f; do
+              RESTORED_FILES+=("${f}")
+              RESTORE_COUNT=$((RESTORE_COUNT + 1))
+            done <<< "${FILES_AT_SHA}"
+          done
+
+          echo "restore_count=${RESTORE_COUNT}" >> "$GITHUB_OUTPUT"
+
+          # Build list for PR body
+          RESTORE_LIST=""
+          for f in "${RESTORED_FILES[@]}"; do
+            RESTORE_LIST="${RESTORE_LIST}- \`${f}\`\n"
+          done
+          echo "restore_list<<EOF" >> "$GITHUB_OUTPUT"
+          echo -e "${RESTORE_LIST}" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+          echo "✅ Restored ${RESTORE_COUNT} protected file(s)"
+
+      - name: Finalize merge commit
+        if: steps.existing.outputs.skip != 'true'
+        run: |
+          git add -A
+
+          if [ "${{ steps.merge.outputs.status }}" = "clean" ]; then
+            # Amend the clean merge commit to include protected file restorations
+            if ! git diff --cached --quiet; then
+              git commit --amend --no-edit
+              echo "📝 Amended merge commit with protected file restorations"
+            else
+              echo "ℹ️  No protected files needed restoration"
+            fi
+          else
+            # Conflict case: create the WIP commit (with conflicts + restored protected files)
             git commit --no-verify -m "WIP: Merge upstream OrcaSlicer ${{ steps.branch.outputs.upstream_sha }} (has conflicts)
 
-            This merge has conflicts that need manual resolution.
-            Conflicted files:
-            ${CONFLICTS}"
+          This merge has conflicts that need manual resolution.
+          Protected HydraSlicer files have been restored to pre-merge state.
 
-            echo "⚠️ Merge has ${CONFLICT_COUNT} conflicted files"
+          Conflicted files:
+          ${{ steps.merge.outputs.conflicted_files }}"
+
+            echo "📝 Created WIP commit with conflicts and restored protected files"
           fi
 
       - name: Push sync branch
@@ -169,6 +255,11 @@ jobs:
                 '- [ ] Check if any modified files overlap with `#ifdef SLIC3R_ENABLE_HYDRA` blocks',
                 '- [ ] Merge when ready',
                 '',
+                ...(parseInt(process.env.RESTORE_COUNT) > 0 ? [
+                  `### Protected files (${process.env.RESTORE_COUNT} files preserved)`,
+                  'The following HydraSlicer-specific files were excluded from the upstream merge:',
+                  process.env.RESTORE_LIST,
+                ] : []),
                 '*Auto-generated by the upstream-sync workflow.*',
               ].join('\n'),
             });
@@ -177,6 +268,8 @@ jobs:
           BRANCH: ${{ steps.branch.outputs.name }}
           UPSTREAM_SHA: ${{ steps.branch.outputs.upstream_sha }}
           UPSTREAM_FULL_SHA: ${{ steps.branch.outputs.upstream_full_sha }}
+          RESTORE_COUNT: ${{ steps.protect.outputs.restore_count }}
+          RESTORE_LIST: ${{ steps.protect.outputs.restore_list }}
 
       - name: Create PR (conflicts)
         if: steps.existing.outputs.skip != 'true' && steps.merge.outputs.status == 'conflicts'
@@ -216,6 +309,11 @@ jobs:
                 '- If upstream restructured a function that Hydra modifies, re-apply the Hydra changes inside the new structure',
                 '- Run a build after resolving to verify: `cmake --build build/ --config RelWithDebInfo`',
                 '',
+                ...(parseInt(process.env.RESTORE_COUNT) > 0 ? [
+                  `### Protected files (${process.env.RESTORE_COUNT} files preserved)`,
+                  'The following HydraSlicer-specific files were excluded from the upstream merge:',
+                  process.env.RESTORE_LIST,
+                ] : []),
                 '*Auto-generated by the upstream-sync workflow.*',
               ].join('\n'),
             });
@@ -239,3 +337,5 @@ jobs:
           UPSTREAM_FULL_SHA: ${{ steps.branch.outputs.upstream_full_sha }}
           CONFLICT_COUNT: ${{ steps.merge.outputs.conflict_count }}
           CONFLICT_DETAILS: ${{ steps.merge.outputs.conflict_details }}
+          RESTORE_COUNT: ${{ steps.protect.outputs.restore_count }}
+          RESTORE_LIST: ${{ steps.protect.outputs.restore_list }}
